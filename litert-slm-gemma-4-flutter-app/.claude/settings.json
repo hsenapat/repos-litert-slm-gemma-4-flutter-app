@@ -1,0 +1,18 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(otool -L \"/Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/LiteRtLm.framework/Versions/A/LiteRtLm\")",
+      "Bash(otool -L ~/Library/Caches/flutter_gemma/native/macos_arm64/libLiteRtLm.dylib)",
+      "Bash(otool -L ~/Library/Caches/flutter_gemma/native/macos_arm64/libGemmaModelConstraintProvider.dylib)",
+      "Bash(find ~/.pub-cache/hosted/pub.dev -path \"*/flutter_gemma_litertlm*\" -name \"build.dart\" 2>/dev/null | head -5)",
+      "Read(//Users/hpsenapati/.pub-cache/hosted/pub.dev/**)",
+      "Bash(pod install *)",
+      "Bash(otool -L /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/LiteRtLm.framework/Versions/A/LiteRtLm)",
+      "Bash(otool -l /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/LiteRtLm.framework/Versions/A/LiteRtLm)",
+      "Bash(otool -L /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/GemmaModelConstraintProvider.framework/Versions/A/GemmaModelConstraintProvider)",
+      "Bash(otool -l /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/.dart_tool/hooks_runner/shared/flutter_gemma_litertlm/build/84fd4fa0ea/libGemmaModelConstraintProvider.dylib)"
+    ]
+  }
+}

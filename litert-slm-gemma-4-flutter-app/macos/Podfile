@@ -1,0 +1,136 @@
+platform :osx, '10.15'
+
+# CocoaPods analytics sends network stats synchronously affecting flutter build latency.
+ENV['COCOAPODS_DISABLE_STATS'] = 'true'
+
+project 'Runner', {
+  'Debug' => :debug,
+  'Profile' => :release,
+  'Release' => :release,
+}
+
+def flutter_root
+  generated_xcode_build_settings_path = File.expand_path(File.join('..', 'Flutter', 'ephemeral', 'Flutter-Generated.xcconfig'), __FILE__)
+  unless File.exist?(generated_xcode_build_settings_path)
+    raise "#{generated_xcode_build_settings_path} must exist. If you're running pod install manually, make sure \"flutter pub get\" is executed first"
+  end
+
+  File.foreach(generated_xcode_build_settings_path) do |line|
+    matches = line.match(/FLUTTER_ROOT\=(.*)/)
+    return matches[1].strip if matches
+  end
+  raise "FLUTTER_ROOT not found in #{generated_xcode_build_settings_path}. Try deleting Flutter-Generated.xcconfig, then run \"flutter pub get\""
+end
+
+require File.expand_path(File.join('packages', 'flutter_tools', 'bin', 'podhelper'), flutter_root)
+
+flutter_macos_podfile_setup
+
+target 'Runner' do
+  use_frameworks!
+
+  flutter_install_all_macos_pods File.dirname(File.realpath(__FILE__))
+  target 'RunnerTests' do
+    inherit! :search_paths
+  end
+end
+
+post_install do |installer|
+  installer.pods_project.targets.each do |target|
+    flutter_additional_macos_build_settings(target)
+  end
+
+  # flutter_gemma_litertlm's build hook intentionally skips bundling the three
+  # Apple companion dylibs (GemmaModelConstraintProvider, LiteRtMetalAccelerator,
+  # LiteRtTopKMetalSampler) on macOS via Native Assets because those upstream
+  # dylibs lack install_name_tool header padding. This post_install script wraps
+  # each dylib into a .framework bundle inside the app and patches the rpath
+  # reference inside LiteRtLm.framework so dlopen resolves at runtime.
+  installer.aggregate_targets.each do |aggregate_target|
+    aggregate_target.user_targets.each do |user_target|
+      phase_name = '[flutter_gemma] Setup LiteRT-LM macOS'
+
+      unless user_target.name == 'Runner'
+        user_target.build_phases
+          .select { |p| p.respond_to?(:name) && p.name == phase_name }
+          .each { |p| user_target.build_phases.delete(p) }
+        next
+      end
+
+      existing = user_target.shell_script_build_phases.find { |p| p.name == phase_name }
+      phase = existing || user_target.new_shell_script_build_phase(phase_name)
+      phase.always_out_of_date = '1'
+      phase.output_paths = ['$(DERIVED_FILE_DIR)/flutter_gemma_litertlm_macos.stamp']
+      phase.shell_script = <<~SHELL
+        set -e
+        FRAMEWORKS="${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Frameworks"
+        if [ ! -d "${FRAMEWORKS}" ]; then
+          exit 0
+        fi
+        # Sweep any leftover lib*.dylib symlinks from older flutter_gemma versions.
+        for base in LiteRtMetalAccelerator LiteRtTopKMetalSampler GemmaModelConstraintProvider; do
+          rm -f "${FRAMEWORKS}/lib${base}.dylib"
+        done
+        # Resolve the dylib source directory.
+        for candidate in \
+            "${HOME}/Library/Caches/flutter_gemma/native/macos_arm64" \
+            "${PODS_ROOT}/../Flutter/ephemeral/.symlinks/plugins/flutter_gemma/native/litert_lm/prebuilt/macos_arm64" \
+            "${SRCROOT}/../../native/litert_lm/prebuilt/macos_arm64"; do
+          if [ -f "${candidate}/libGemmaModelConstraintProvider.dylib" ]; then
+            PLUGIN_PREBUILT="${candidate}"
+            break
+          fi
+        done
+        if [ -z "${PLUGIN_PREBUILT:-}" ]; then
+          echo "[flutter_gemma] ERROR: Could not find macOS companion dylibs in any of:"
+          echo "  - $HOME/Library/Caches/flutter_gemma/native/macos_arm64/"
+          echo "  - $PODS_ROOT/../Flutter/ephemeral/.symlinks/plugins/flutter_gemma/native/litert_lm/prebuilt/macos_arm64/"
+          echo "  - $SRCROOT/../../native/litert_lm/prebuilt/macos_arm64/"
+          echo "  Run 'flutter clean && flutter pub get' to repopulate the Native Assets cache."
+          exit 1
+        fi
+        echo "[flutter_gemma] Using companion dylibs from: ${PLUGIN_PREBUILT}"
+        for base in GemmaModelConstraintProvider LiteRtMetalAccelerator LiteRtTopKMetalSampler; do
+          src="${PLUGIN_PREBUILT}/lib${base}.dylib"
+          if [ ! -f "${src}" ]; then
+            echo "[flutter_gemma] WARNING: ${src} not found — runtime dlopen will fail"
+            continue
+          fi
+          fw_dir="${FRAMEWORKS}/${base}.framework"
+          mkdir -p "${fw_dir}/Versions/A/Resources"
+          cp "${src}" "${fw_dir}/Versions/A/${base}"
+          install_name_tool -id "@rpath/${base}.framework/Versions/A/${base}" \\
+            "${fw_dir}/Versions/A/${base}" 2>/dev/null || true
+          (cd "${fw_dir}" && ln -sfh A Versions/Current && ln -sfh "Versions/Current/${base}" "${base}" && ln -sfh "Versions/Current/Resources" Resources)
+          cat > "${fw_dir}/Versions/A/Resources/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleExecutable</key><string>${base}</string>
+  <key>CFBundleIdentifier</key><string>dev.flutterberlin.flutter_gemma.${base}</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundlePackageType</key><string>FMWK</string>
+</dict>
+</plist>
+EOF
+          echo "[flutter_gemma] copied ${base}.framework"
+        done
+        # Patch LiteRtLm.framework's LC_LOAD_DYLIB reference from the upstream
+        # @rpath/libGemmaModelConstraintProvider.dylib to the framework path we
+        # just created above.
+        LITERTLM="${FRAMEWORKS}/LiteRtLm.framework/Versions/A/LiteRtLm"
+        if [ -f "${LITERTLM}" ]; then
+          install_name_tool -change \\
+            @rpath/libGemmaModelConstraintProvider.dylib \\
+            @rpath/GemmaModelConstraintProvider.framework/Versions/A/GemmaModelConstraintProvider \\
+            "${LITERTLM}" 2>/dev/null || true
+          codesign --force --sign - "${LITERTLM}" 2>/dev/null || true
+        fi
+        mkdir -p "$(dirname "${SCRIPT_OUTPUT_FILE_0}")"
+        touch "${SCRIPT_OUTPUT_FILE_0}"
+      SHELL
+    end
+  end
+end
