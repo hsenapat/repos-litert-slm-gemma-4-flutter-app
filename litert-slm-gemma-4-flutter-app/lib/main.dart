@@ -50,7 +50,7 @@ class _GemmaAppState extends State<GemmaApp> {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Gemma 4 On-Device',
+      title: 'Synergy RAG Offline SLM for Marine Engineering',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),

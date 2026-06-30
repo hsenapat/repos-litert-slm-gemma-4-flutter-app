@@ -2,6 +2,8 @@ import 'dart:async';
 import 'dart:developer' as dev;
 
 import 'package:flutter/material.dart';
+import 'package:speech_to_text/speech_recognition_result.dart';
+import 'package:speech_to_text/speech_to_text.dart';
 import '../models/chat_message.dart';
 import '../services/gemma_service.dart';
 import '../services/rag_service.dart';
@@ -21,6 +23,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   bool _isGenerating = false;
 
+  // STT
+  final _speech = SpeechToText();
+  bool _sttAvailable = false;
+  bool _isListening = false;
+
   @override
   void initState() {
     super.initState();
@@ -29,11 +36,85 @@ class _ChatScreenState extends State<ChatScreen> {
     if (_service.state == GemmaServiceState.idle) {
       _service.initialize();
     }
-    // Delay RAG init until after the first frame so the UI renders first,
-    // preventing a black screen when the embedding loop blocks the render thread.
     WidgetsBinding.instance.addPostFrameCallback((_) {
       RagService.instance.initialize();
+      _initStt();
     });
+  }
+
+  Future<void> _initStt() async {
+    final available = await _speech.initialize(
+      onError: (e) => debugPrint('[STT] error: $e'),
+      onStatus: (status) {
+        debugPrint('[STT] status: $status');
+        // When the engine finishes (done / notListening) update listening flag.
+        if (status == SpeechToText.doneStatus ||
+            status == SpeechToText.notListeningStatus) {
+          if (mounted) setState(() => _isListening = false);
+        }
+      },
+    );
+    if (mounted) setState(() => _sttAvailable = available);
+  }
+
+  Future<void> _toggleListening() async {
+    if (_isListening) {
+      await _speech.stop();
+      setState(() => _isListening = false);
+      return;
+    }
+
+    if (!_sttAvailable) {
+      _showSnackBar('Speech recognition is not available on this device.');
+      return;
+    }
+
+    setState(() => _isListening = true);
+    _inputController.clear();
+
+    await _speech.listen(
+      onResult: _onSpeechResult,
+      listenOptions: SpeechListenOptions(
+        localeId: 'en_US',
+        partialResults: true,
+        cancelOnError: true,
+        listenFor: const Duration(seconds: 30),
+        pauseFor: const Duration(seconds: 3),
+      ),
+    );
+  }
+
+  void _onSpeechResult(SpeechRecognitionResult result) {
+    // Show live partial text in the field while speaking.
+    _inputController.text = result.recognizedWords;
+    _inputController.selection = TextSelection.collapsed(
+      offset: result.recognizedWords.length,
+    );
+
+    if (result.finalResult) {
+      setState(() => _isListening = false);
+
+      final words = result.recognizedWords.trim();
+      if (words.isEmpty) {
+        // Nothing recognized — likely a non-English speaker.
+        _showSnackBar('Please speak in English.');
+        return;
+      }
+
+      // Auto-send.
+      _sendMessage();
+    }
+  }
+
+  void _showSnackBar(String message) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text(message),
+        behavior: SnackBarBehavior.floating,
+        duration: const Duration(seconds: 3),
+      ),
+    );
   }
 
   @override
@@ -42,6 +123,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _service.onStateChanged = null;
     RagService.instance.onProgressChanged = null;
+    _speech.cancel();
     super.dispose();
   }
 
@@ -59,7 +141,6 @@ class _ChatScreenState extends State<ChatScreen> {
     });
     _scrollToBottom();
 
-    // If the vector store is still being built (first launch), reply immediately.
     if (!RagService.instance.isReady) {
       setState(() {
         _messages[_messages.length - 1] = const ChatMessage(
@@ -139,7 +220,52 @@ class _ChatScreenState extends State<ChatScreen> {
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('Gemma 4 — On Device'),
+        title: Container(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: [
+                Theme.of(context).colorScheme.primary,
+                Theme.of(context).colorScheme.tertiary,
+              ],
+            ),
+            borderRadius: BorderRadius.circular(20),
+            boxShadow: [
+              BoxShadow(
+                color: Theme.of(context).colorScheme.primary.withValues(alpha: 0.4),
+                blurRadius: 8,
+                offset: const Offset(0, 2),
+              ),
+            ],
+          ),
+          child: FittedBox(
+            fit: BoxFit.scaleDown,
+            alignment: Alignment.centerLeft,
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Icon(Icons.anchor, size: 16, color: Colors.white),
+                const SizedBox(width: 6),
+                Text(
+                  'Synergy RAG Offline SLM for Marine Engineering',
+                  style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.white,
+                    letterSpacing: 0.3,
+                    shadows: [
+                      Shadow(
+                        color: Colors.black.withValues(alpha: 0.2),
+                        blurRadius: 4,
+                        offset: const Offset(0, 1),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ),
         actions: [
           if (_service.state == GemmaServiceState.ready)
             IconButton(
@@ -165,7 +291,10 @@ class _ChatScreenState extends State<ChatScreen> {
                 scrollController: _scrollController,
                 inputController: _inputController,
                 isGenerating: _isGenerating,
+                isListening: _isListening,
+                sttAvailable: _sttAvailable,
                 onSend: _sendMessage,
+                onMicTap: _toggleListening,
               ),
               if (RagService.instance.isPopulating)
                 _RagProgressBanner(
@@ -181,6 +310,8 @@ class _ChatScreenState extends State<ChatScreen> {
     );
   }
 }
+
+// ── Download progress ─────────────────────────────────────────────────────────
 
 class _DownloadProgress extends StatelessWidget {
   final double progress;
@@ -216,6 +347,8 @@ class _DownloadProgress extends StatelessWidget {
   }
 }
 
+// ── Generic status / error widgets ───────────────────────────────────────────
+
 class _StatusMessage extends StatelessWidget {
   final IconData icon;
   final String message;
@@ -249,7 +382,8 @@ class _ErrorView extends StatelessWidget {
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
-            Icon(Icons.error_outline, size: 48, color: Theme.of(context).colorScheme.error),
+            Icon(Icons.error_outline,
+                size: 48, color: Theme.of(context).colorScheme.error),
             const SizedBox(height: 16),
             Text(
               message,
@@ -269,6 +403,8 @@ class _ErrorView extends StatelessWidget {
   }
 }
 
+// ── Loading model screen with elapsed timer ───────────────────────────────────
+
 class _LoadingModelScreen extends StatefulWidget {
   const _LoadingModelScreen();
 
@@ -283,9 +419,10 @@ class _LoadingModelScreenState extends State<_LoadingModelScreen> {
   @override
   void initState() {
     super.initState();
-    _timer = Timer.periodic(const Duration(seconds: 1), (_) {
-      setState(() => _seconds++);
-    });
+    _timer = Timer.periodic(
+      const Duration(seconds: 1),
+      (_) => setState(() => _seconds++),
+    );
   }
 
   @override
@@ -328,6 +465,8 @@ class _LoadingModelScreenState extends State<_LoadingModelScreen> {
   }
 }
 
+// ── Sample questions ──────────────────────────────────────────────────────────
+
 const _kSampleQuestions = [
   'What is the fuel injection control process for the MAN G95ME-C10.5-GI engine?',
   'What are the turbocharger options for the WinGD X92-B engine?',
@@ -341,19 +480,27 @@ const _kSampleQuestions = [
   'How should cylinder lubrication be adjusted for low-sulphur fuel operation after 2020?',
 ];
 
+// ── Chat body ─────────────────────────────────────────────────────────────────
+
 class _ChatBody extends StatelessWidget {
   final List<ChatMessage> messages;
   final ScrollController scrollController;
   final TextEditingController inputController;
   final bool isGenerating;
+  final bool isListening;
+  final bool sttAvailable;
   final VoidCallback onSend;
+  final VoidCallback onMicTap;
 
   const _ChatBody({
     required this.messages,
     required this.scrollController,
     required this.inputController,
     required this.isGenerating,
+    required this.isListening,
+    required this.sttAvailable,
     required this.onSend,
+    required this.onMicTap,
   });
 
   void _pickSampleQuestion(BuildContext context) {
@@ -381,16 +528,19 @@ class _ChatBody extends StatelessWidget {
               child: ListView.separated(
                 shrinkWrap: true,
                 itemCount: _kSampleQuestions.length,
-                separatorBuilder: (context, i) => const Divider(height: 1, indent: 16),
+                separatorBuilder: (_, i) =>
+                    const Divider(height: 1, indent: 16),
                 itemBuilder: (ctx, i) => ListTile(
                   leading: CircleAvatar(
                     radius: 12,
-                    backgroundColor: Theme.of(context).colorScheme.primaryContainer,
+                    backgroundColor:
+                        Theme.of(context).colorScheme.primaryContainer,
                     child: Text(
                       '${i + 1}',
                       style: TextStyle(
                         fontSize: 10,
-                        color: Theme.of(context).colorScheme.onPrimaryContainer,
+                        color:
+                            Theme.of(context).colorScheme.onPrimaryContainer,
                         fontWeight: FontWeight.bold,
                       ),
                     ),
@@ -410,23 +560,24 @@ class _ChatBody extends StatelessWidget {
     ).then((selected) {
       if (selected != null) {
         inputController.text = selected;
-        inputController.selection = TextSelection.collapsed(offset: selected.length);
+        inputController.selection =
+            TextSelection.collapsed(offset: selected.length);
       }
     });
   }
 
   @override
   Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
     return Column(
       children: [
         Expanded(
           child: messages.isEmpty
               ? Center(
                   child: Text(
-                    'Ask Gemma 4 anything',
-                    style: TextStyle(
-                      color: Theme.of(context).colorScheme.outline,
-                    ),
+                    'Ask a marine engineering question…',
+                    style: TextStyle(color: colorScheme.outline),
                   ),
                 )
               : ListView.builder(
@@ -446,11 +597,21 @@ class _ChatBody extends StatelessWidget {
           ),
           child: Row(
             children: [
+              // Sample questions button
               IconButton(
-                onPressed: isGenerating ? null : () => _pickSampleQuestion(context),
+                onPressed:
+                    isGenerating ? null : () => _pickSampleQuestion(context),
                 tooltip: 'Sample questions',
                 icon: const Icon(Icons.lightbulb_outline),
               ),
+              // Mic button
+              _MicButton(
+                isListening: isListening,
+                enabled: sttAvailable && !isGenerating,
+                onTap: onMicTap,
+              ),
+              const SizedBox(width: 4),
+              // Text input
               Expanded(
                 child: TextField(
                   controller: inputController,
@@ -459,7 +620,9 @@ class _ChatBody extends StatelessWidget {
                   textInputAction: TextInputAction.send,
                   onSubmitted: (_) => onSend(),
                   decoration: InputDecoration(
-                    hintText: 'Message Gemma...',
+                    hintText: isListening
+                        ? 'Listening…'
+                        : 'Message Gemma...',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
                     ),
@@ -471,6 +634,7 @@ class _ChatBody extends StatelessWidget {
                 ),
               ),
               const SizedBox(width: 8),
+              // Send button
               FilledButton(
                 onPressed: isGenerating ? null : onSend,
                 style: FilledButton.styleFrom(
@@ -492,6 +656,74 @@ class _ChatBody extends StatelessWidget {
     );
   }
 }
+
+// ── Mic button with animated pulse when listening ─────────────────────────────
+
+class _MicButton extends StatefulWidget {
+  final bool isListening;
+  final bool enabled;
+  final VoidCallback onTap;
+
+  const _MicButton({
+    required this.isListening,
+    required this.enabled,
+    required this.onTap,
+  });
+
+  @override
+  State<_MicButton> createState() => _MicButtonState();
+}
+
+class _MicButtonState extends State<_MicButton>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _pulse;
+
+  @override
+  void initState() {
+    super.initState();
+    _pulse = AnimationController(
+      vsync: this,
+      duration: const Duration(milliseconds: 800),
+    )..repeat(reverse: true);
+  }
+
+  @override
+  void dispose() {
+    _pulse.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+
+    return AnimatedBuilder(
+      animation: _pulse,
+      builder: (_, child) {
+        final scale = widget.isListening ? 1.0 + _pulse.value * 0.15 : 1.0;
+        return Transform.scale(
+          scale: scale,
+          child: child,
+        );
+      },
+      child: IconButton(
+        onPressed: widget.enabled ? widget.onTap : null,
+        tooltip: widget.isListening ? 'Stop listening' : 'Speak',
+        style: IconButton.styleFrom(
+          backgroundColor: widget.isListening
+              ? colorScheme.error.withValues(alpha: 0.15)
+              : null,
+        ),
+        icon: Icon(
+          widget.isListening ? Icons.mic : Icons.mic_none,
+          color: widget.isListening ? colorScheme.error : null,
+        ),
+      ),
+    );
+  }
+}
+
+// ── RAG progress banner ───────────────────────────────────────────────────────
 
 class _RagProgressBanner extends StatelessWidget {
   final double progress;
