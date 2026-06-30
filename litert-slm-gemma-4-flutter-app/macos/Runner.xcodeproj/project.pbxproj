@@ -245,6 +245,7 @@
 				33CC110E2044A8840003C045 /* Bundle Framework */,
 				3399D490228B24CF009A79C7 /* ShellScript */,
 				669382E743B4FC7D0B44EFB6 /* [flutter_gemma] Setup LiteRT-LM macOS */,
+				18323E521F5538B4719F2661 /* [tflite_flutter] Copy libtensorflowlite_c-mac.dylib */,
 			);
 			buildRules = (
 			);
@@ -333,6 +334,25 @@
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXShellScriptBuildPhase section */
+		18323E521F5538B4719F2661 /* [tflite_flutter] Copy libtensorflowlite_c-mac.dylib */ = {
+			isa = PBXShellScriptBuildPhase;
+			alwaysOutOfDate = 1;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			inputFileListPaths = (
+			);
+			inputPaths = (
+			);
+			name = "[tflite_flutter] Copy libtensorflowlite_c-mac.dylib";
+			outputFileListPaths = (
+			);
+			outputPaths = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+			shellPath = /bin/sh;
+			shellScript = "set -e\nDYLIB_SRC=$(find \"$HOME/.pub-cache/hosted/pub.dev\" -name \"libtensorflowlite_c-mac.dylib\" -path \"*/tflite_flutter*\" | head -1)\nif [ -z \"$DYLIB_SRC\" ]; then\n  echo \"[tflite_flutter] ERROR: libtensorflowlite_c-mac.dylib not found in pub-cache\"\n  exit 1\nfi\nRESOURCES=\"${BUILT_PRODUCTS_DIR}/${PRODUCT_NAME}.app/Contents/Resources\"\nmkdir -p \"$RESOURCES\"\ncp \"$DYLIB_SRC\" \"$RESOURCES/libtensorflowlite_c-mac.dylib\"\ncodesign --force --sign - \"$RESOURCES/libtensorflowlite_c-mac.dylib\" 2>/dev/null || true\necho \"[tflite_flutter] Copied $(basename $DYLIB_SRC)\"\n";
+		};
 		3399D490228B24CF009A79C7 /* ShellScript */ = {
 			isa = PBXShellScriptBuildPhase;
 			alwaysOutOfDate = 1;
