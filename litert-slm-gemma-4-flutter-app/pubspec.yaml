@@ -32,3 +32,4 @@ flutter:
   assets:
     - assets/manuals/manuals_rag.db
     - assets/manuals/rag_vector.db
+    - assets/images/logo.png

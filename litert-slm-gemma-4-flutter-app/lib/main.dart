@@ -4,6 +4,7 @@ import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
 import 'package:flutter_gemma_embeddings/flutter_gemma_embeddings.dart';
 import 'package:flutter_gemma_rag_sqlite/flutter_gemma_rag_sqlite.dart';
 import 'screens/chat_screen.dart';
+import 'screens/splash_screen.dart';
 
 void main() {
   // Do NOT await anything here — render the first frame immediately so
@@ -20,13 +21,14 @@ class GemmaApp extends StatefulWidget {
 }
 
 class _GemmaAppState extends State<GemmaApp> {
+  bool _splashDone = false;
   bool _frameworkReady = false;
   String? _initError;
 
   @override
   void initState() {
     super.initState();
-    // Initialize after the first frame so the UI is already visible.
+    // Initialize framework in background — splash plays concurrently.
     WidgetsBinding.instance.addPostFrameCallback((_) => _initFramework());
   }
 
@@ -47,6 +49,20 @@ class _GemmaAppState extends State<GemmaApp> {
     }
   }
 
+  void _onSplashComplete() => setState(() => _splashDone = true);
+
+  Widget _resolveHome() {
+    // Show splash until it finishes animating.
+    if (!_splashDone) {
+      return SplashScreen(onComplete: _onSplashComplete);
+    }
+    if (_initError != null) {
+      return _ErrorScreen(message: _initError!, onRetry: _initFramework);
+    }
+    if (_frameworkReady) return const ChatScreen();
+    return const _InitializingScreen();
+  }
+
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
@@ -63,11 +79,13 @@ class _GemmaAppState extends State<GemmaApp> {
         ),
         useMaterial3: true,
       ),
-      home: _initError != null
-          ? _ErrorScreen(message: _initError!, onRetry: _initFramework)
-          : _frameworkReady
-              ? const ChatScreen()
-              : const _InitializingScreen(),
+      home: AnimatedSwitcher(
+        duration: const Duration(milliseconds: 600),
+        child: KeyedSubtree(
+          key: ValueKey(_splashDone),
+          child: _resolveHome(),
+        ),
+      ),
     );
   }
 }
