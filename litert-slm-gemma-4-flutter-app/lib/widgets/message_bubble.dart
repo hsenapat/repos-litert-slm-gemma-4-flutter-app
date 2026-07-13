@@ -4,14 +4,17 @@ import '../models/rag_chunk.dart';
 
 class MessageBubble extends StatelessWidget {
   final ChatMessage message;
+  final VoidCallback? onSpeak;
 
-  const MessageBubble({super.key, required this.message});
+  const MessageBubble({super.key, required this.message, this.onSpeak});
 
   @override
   Widget build(BuildContext context) {
     final isUser = message.role == MessageRole.user;
     final colorScheme = Theme.of(context).colorScheme;
     final sources = message.sources;
+    final canSpeak =
+        !isUser && !message.isThinking && message.text.trim().isNotEmpty;
 
     return Align(
       alignment: isUser ? Alignment.centerRight : Alignment.centerLeft,
@@ -66,6 +69,22 @@ class MessageBubble extends StatelessWidget {
                       ),
                     ),
             ),
+            if (canSpeak && onSpeak != null)
+              Padding(
+                padding: const EdgeInsets.only(left: 8),
+                child: InkWell(
+                  onTap: onSpeak,
+                  borderRadius: BorderRadius.circular(16),
+                  child: Padding(
+                    padding: const EdgeInsets.all(4),
+                    child: Icon(
+                      Icons.volume_up_outlined,
+                      size: 16,
+                      color: colorScheme.outline,
+                    ),
+                  ),
+                ),
+              ),
             if (!isUser && sources != null && sources.isNotEmpty)
               _SourceCitations(sources: sources),
           ],

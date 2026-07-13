@@ -7,6 +7,7 @@ import 'package:speech_to_text/speech_to_text.dart';
 import '../models/chat_message.dart';
 import '../services/gemma_service.dart';
 import '../services/rag_service.dart';
+import '../services/voice_service.dart';
 import '../widgets/message_bubble.dart';
 
 class ChatScreen extends StatefulWidget {
@@ -28,17 +29,25 @@ class _ChatScreenState extends State<ChatScreen> {
   bool _sttAvailable = false;
   bool _isListening = false;
 
+  // TTS (Sherpa-ONNX)
+  final _voice = VoiceService.instance;
+  bool _autoSpeak = true;
+
   @override
   void initState() {
     super.initState();
     _service.onStateChanged = (_) => setState(() {});
     RagService.instance.onProgressChanged = () => setState(() {});
+    _voice.onStateChanged = (_) => setState(() {});
     if (_service.state == GemmaServiceState.idle) {
       _service.initialize();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       RagService.instance.initialize();
       _initStt();
+      _voice.initialize().catchError((e) {
+        debugPrint('[Voice] init failed: $e');
+      });
     });
   }
 
@@ -123,6 +132,7 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _service.onStateChanged = null;
     RagService.instance.onProgressChanged = null;
+    _voice.onStateChanged = null;
     _speech.cancel();
     super.dispose();
   }
@@ -186,6 +196,9 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         });
         _scrollToBottom();
+      }
+      if (_autoSpeak && buffer.isNotEmpty) {
+        _voice.speak(buffer.toString());
       }
     } catch (e) {
       setState(() {
@@ -267,12 +280,18 @@ class _ChatScreenState extends State<ChatScreen> {
           ),
         ),
         actions: [
-          if (_service.state == GemmaServiceState.ready)
+          if (_service.state == GemmaServiceState.ready) ...[
+            IconButton(
+              icon: Icon(_autoSpeak ? Icons.volume_up : Icons.volume_off),
+              tooltip: _autoSpeak ? 'Mute spoken replies' : 'Speak replies aloud',
+              onPressed: () => setState(() => _autoSpeak = !_autoSpeak),
+            ),
             IconButton(
               icon: const Icon(Icons.refresh),
               tooltip: 'New conversation',
               onPressed: _isGenerating ? null : _resetChat,
             ),
+          ],
         ],
       ),
       body: switch (_service.state) {
@@ -295,11 +314,27 @@ class _ChatScreenState extends State<ChatScreen> {
                 sttAvailable: _sttAvailable,
                 onSend: _sendMessage,
                 onMicTap: _toggleListening,
+                onSpeak: _voice.speak,
               ),
-              if (RagService.instance.isPopulating)
-                _RagProgressBanner(
-                  progress: RagService.instance.populationProgress ?? 0.0,
+              Positioned(
+                top: 0,
+                left: 0,
+                right: 0,
+                child: Column(
+                  children: [
+                    if (RagService.instance.isPopulating)
+                      _RagProgressBanner(
+                        progress: RagService.instance.populationProgress ?? 0.0,
+                      ),
+                    if (_voice.state == VoiceServiceState.downloading ||
+                        _voice.state == VoiceServiceState.loading)
+                      _VoiceModelBanner(
+                        loading: _voice.state == VoiceServiceState.loading,
+                        progress: _voice.downloadProgress,
+                      ),
+                  ],
                 ),
+              ),
             ],
           ),
         _ => const _StatusMessage(
@@ -491,6 +526,7 @@ class _ChatBody extends StatelessWidget {
   final bool sttAvailable;
   final VoidCallback onSend;
   final VoidCallback onMicTap;
+  final void Function(String text) onSpeak;
 
   const _ChatBody({
     required this.messages,
@@ -501,6 +537,7 @@ class _ChatBody extends StatelessWidget {
     required this.sttAvailable,
     required this.onSend,
     required this.onMicTap,
+    required this.onSpeak,
   });
 
   void _pickSampleQuestion(BuildContext context) {
@@ -584,7 +621,14 @@ class _ChatBody extends StatelessWidget {
                   controller: scrollController,
                   padding: const EdgeInsets.symmetric(vertical: 12),
                   itemCount: messages.length,
-                  itemBuilder: (_, i) => MessageBubble(message: messages[i]),
+                  itemBuilder: (_, i) => MessageBubble(
+                    message: messages[i],
+                    onSpeak: messages[i].role == MessageRole.model &&
+                            !messages[i].isThinking &&
+                            messages[i].text.trim().isNotEmpty
+                        ? () => onSpeak(messages[i].text)
+                        : null,
+                  ),
                 ),
         ),
         const Divider(height: 1),
@@ -732,35 +776,72 @@ class _RagProgressBanner extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final pct = (progress * 100).toStringAsFixed(0);
-    return Positioned(
-      top: 0,
-      left: 0,
-      right: 0,
-      child: Material(
-        elevation: 2,
-        child: Container(
-          color: Theme.of(context).colorScheme.surfaceContainerHighest,
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
-            children: [
-              Row(
-                children: [
-                  const Icon(Icons.library_books_outlined, size: 16),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: Text(
-                      'Building ship manual index… $pct%',
-                      style: Theme.of(context).textTheme.bodySmall,
-                    ),
+    return Material(
+      elevation: 2,
+      child: Container(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.library_books_outlined, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    'Building ship manual index… $pct%',
+                    style: Theme.of(context).textTheme.bodySmall,
                   ),
-                ],
-              ),
-              const SizedBox(height: 6),
-              LinearProgressIndicator(value: progress),
-            ],
-          ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            LinearProgressIndicator(value: progress),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Voice model download banner ─────────────────────────────────────────────
+
+class _VoiceModelBanner extends StatelessWidget {
+  final bool loading;
+  final double progress;
+  const _VoiceModelBanner({required this.loading, required this.progress});
+
+  @override
+  Widget build(BuildContext context) {
+    final pct = (progress * 100).toStringAsFixed(0);
+    return Material(
+      elevation: 2,
+      child: Container(
+        color: Theme.of(context).colorScheme.surfaceContainerHighest,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Row(
+              children: [
+                const Icon(Icons.record_voice_over_outlined, size: 16),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    loading
+                        ? 'Preparing voice model…'
+                        : 'Downloading voice model (TTS)… $pct%',
+                    style: Theme.of(context).textTheme.bodySmall,
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 6),
+            LinearProgressIndicator(value: loading ? null : progress),
+          ],
         ),
       ),
     );
