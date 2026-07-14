@@ -6,6 +6,8 @@
 - Model download progress UI (first launch only)
 - Thinking indicator while model generates
 - User / model message bubbles
+- Voice input (STT) via on-device Whisper (`whisper_kit`) — tap the mic, recording auto-stops on silence and transcribes, auto-sends on stop
+- Spoken replies (TTS) via the platform's native voice — toggle with the speaker icon in the app bar
 
 ## Model Configuration
 

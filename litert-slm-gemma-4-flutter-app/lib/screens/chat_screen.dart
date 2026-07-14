@@ -2,11 +2,10 @@ import 'dart:async';
 import 'dart:developer' as dev;
 
 import 'package:flutter/material.dart';
-import 'package:speech_to_text/speech_recognition_result.dart';
-import 'package:speech_to_text/speech_to_text.dart';
 import '../models/chat_message.dart';
 import '../services/gemma_service.dart';
 import '../services/rag_service.dart';
+import '../services/stt_service.dart';
 import '../services/voice_service.dart';
 import '../widgets/message_bubble.dart';
 
@@ -24,12 +23,11 @@ class _ChatScreenState extends State<ChatScreen> {
   final _scrollController = ScrollController();
   bool _isGenerating = false;
 
-  // STT
-  final _speech = SpeechToText();
-  bool _sttAvailable = false;
+  // STT (Whisper, on-device via whisper_kit)
+  final _stt = WhisperSttService.instance;
   bool _isListening = false;
 
-  // TTS (Sherpa-ONNX)
+  // TTS (platform on-device engine via flutter_tts)
   final _voice = VoiceService.instance;
   bool _autoSpeak = true;
 
@@ -38,80 +36,68 @@ class _ChatScreenState extends State<ChatScreen> {
     super.initState();
     _service.onStateChanged = (_) => setState(() {});
     RagService.instance.onProgressChanged = () => setState(() {});
-    _voice.onStateChanged = (_) => setState(() {});
+    _stt.onStateChanged = (_) => setState(() {});
+    _stt.onTranscribingChanged = () => setState(() {});
     if (_service.state == GemmaServiceState.idle) {
       _service.initialize();
     }
     WidgetsBinding.instance.addPostFrameCallback((_) {
       RagService.instance.initialize();
-      _initStt();
+      _stt.initialize().catchError((e) {
+        debugPrint('[STT] init failed: $e');
+      });
       _voice.initialize().catchError((e) {
         debugPrint('[Voice] init failed: $e');
       });
     });
   }
 
-  Future<void> _initStt() async {
-    final available = await _speech.initialize(
-      onError: (e) => debugPrint('[STT] error: $e'),
-      onStatus: (status) {
-        debugPrint('[STT] status: $status');
-        // When the engine finishes (done / notListening) update listening flag.
-        if (status == SpeechToText.doneStatus ||
-            status == SpeechToText.notListeningStatus) {
-          if (mounted) setState(() => _isListening = false);
-        }
-      },
+  /// Shared by manual stop (mic tapped again) and silence-triggered
+  /// auto-stop: turns the mic indicator off and sends whatever was
+  /// transcribed.
+  Future<void> _finishListening(String text) async {
+    debugPrint('[STT] _finishListening: "$text"');
+    if (!mounted) return;
+    setState(() => _isListening = false);
+
+    final words = text.trim();
+    if (words.isEmpty) {
+      _showSnackBar('No speech detected. Please try again.');
+      return;
+    }
+
+    _inputController.text = words;
+    _inputController.selection = TextSelection.collapsed(
+      offset: words.length,
     );
-    if (mounted) setState(() => _sttAvailable = available);
+    _sendMessage();
   }
 
   Future<void> _toggleListening() async {
+    debugPrint('[STT] mic tapped, _isListening=$_isListening');
     if (_isListening) {
-      await _speech.stop();
-      setState(() => _isListening = false);
+      final text = await _stt.stopListening();
+      await _finishListening(text);
       return;
     }
 
-    if (!_sttAvailable) {
-      _showSnackBar('Speech recognition is not available on this device.');
+    if (_stt.state != SttServiceState.ready) {
+      _showSnackBar('Speech recognition is still getting ready.');
       return;
     }
+
+    // Don't let the assistant's own voice bleed into the mic.
+    await _voice.stopSpeaking();
 
     setState(() => _isListening = true);
     _inputController.clear();
 
-    await _speech.listen(
-      onResult: _onSpeechResult,
-      listenOptions: SpeechListenOptions(
-        localeId: 'en_US',
-        partialResults: true,
-        cancelOnError: true,
-        listenFor: const Duration(seconds: 30),
-        pauseFor: const Duration(seconds: 3),
-      ),
-    );
-  }
-
-  void _onSpeechResult(SpeechRecognitionResult result) {
-    // Show live partial text in the field while speaking.
-    _inputController.text = result.recognizedWords;
-    _inputController.selection = TextSelection.collapsed(
-      offset: result.recognizedWords.length,
-    );
-
-    if (result.finalResult) {
+    try {
+      await _stt.startListening(onAutoStop: _finishListening);
+    } catch (e) {
+      debugPrint('[STT] listen failed: $e');
       setState(() => _isListening = false);
-
-      final words = result.recognizedWords.trim();
-      if (words.isEmpty) {
-        // Nothing recognized — likely a non-English speaker.
-        _showSnackBar('Please speak in English.');
-        return;
-      }
-
-      // Auto-send.
-      _sendMessage();
+      _showSnackBar('Could not access the microphone.');
     }
   }
 
@@ -132,8 +118,10 @@ class _ChatScreenState extends State<ChatScreen> {
     _scrollController.dispose();
     _service.onStateChanged = null;
     RagService.instance.onProgressChanged = null;
-    _voice.onStateChanged = null;
-    _speech.cancel();
+    _stt.onStateChanged = null;
+    _stt.onTranscribingChanged = null;
+    _stt.cancelListening();
+    _voice.stopSpeaking();
     super.dispose();
   }
 
@@ -184,7 +172,10 @@ class _ChatScreenState extends State<ChatScreen> {
       return;
     }
 
+    if (_autoSpeak) await _voice.stopSpeaking();
+
     final buffer = StringBuffer();
+    var spokenUpTo = 0;
     try {
       await for (final token in _service.sendMessage(text, context: relevant)) {
         buffer.write(token);
@@ -196,9 +187,19 @@ class _ChatScreenState extends State<ChatScreen> {
           );
         });
         _scrollToBottom();
+
+        if (_autoSpeak) {
+          spokenUpTo = _speakReadySentences(buffer.toString(), spokenUpTo);
+        }
       }
-      if (_autoSpeak && buffer.isNotEmpty) {
-        _voice.speak(buffer.toString());
+      if (_autoSpeak) {
+        final remainder = buffer.toString().substring(spokenUpTo).trim();
+        if (remainder.isNotEmpty) {
+          debugPrint(
+            '[Voice] queuing remainder at stream end (${remainder.length} chars)',
+          );
+          _voice.enqueue(remainder);
+        }
       }
     } catch (e) {
       setState(() {
@@ -210,6 +211,32 @@ class _ChatScreenState extends State<ChatScreen> {
     } finally {
       setState(() => _isGenerating = false);
     }
+  }
+
+  /// Enqueues complete sentences found in [text] (after [from]) to TTS as
+  /// soon as they're finished, so speech starts while the model is still
+  /// generating rather than waiting for the full response. A `.`/`!`/`?` is
+  /// only treated as a sentence end once the character after it is known
+  /// and is whitespace — this avoids splitting on things like "10.5" before
+  /// the rest of the token has arrived. Returns the new spoken-up-to index.
+  int _speakReadySentences(String text, int from) {
+    var start = from;
+    for (var i = from; i < text.length - 1; i++) {
+      final isSentenceEnd =
+          '.!?'.contains(text[i]) && (text[i + 1] == ' ' || text[i + 1] == '\n');
+      if (isSentenceEnd || text[i] == '\n') {
+        final chunk = text.substring(start, i + 1).trim();
+        if (chunk.isNotEmpty) {
+          debugPrint(
+            '[Voice] queuing mid-stream sentence (${chunk.length} chars) '
+            'at token-buffer length ${text.length}',
+          );
+          _voice.enqueue(chunk);
+        }
+        start = i + 1;
+      }
+    }
+    return start;
   }
 
   void _scrollToBottom() {
@@ -225,6 +252,7 @@ class _ChatScreenState extends State<ChatScreen> {
   }
 
   Future<void> _resetChat() async {
+    await _voice.stopSpeaking();
     await _service.resetChat();
     setState(() => _messages.clear());
   }
@@ -294,54 +322,72 @@ class _ChatScreenState extends State<ChatScreen> {
           ],
         ],
       ),
-      body: switch (_service.state) {
-        GemmaServiceState.downloading => _DownloadProgress(
-            progress: _service.downloadProgress,
-          ),
-        GemmaServiceState.loading => const _LoadingModelScreen(),
-        GemmaServiceState.error => _ErrorView(
-            message: _service.errorMessage ?? 'Unknown error',
-            onRetry: _service.initialize,
-          ),
-        GemmaServiceState.ready => Stack(
-            children: [
-              _ChatBody(
+      body: Stack(
+        children: [
+          switch (_service.state) {
+            GemmaServiceState.downloading => _DownloadProgress(
+                progress: _service.downloadProgress,
+              ),
+            GemmaServiceState.loading => const _LoadingModelScreen(),
+            GemmaServiceState.error => _ErrorView(
+                message: _service.errorMessage ?? 'Unknown error',
+                onRetry: _service.initialize,
+              ),
+            GemmaServiceState.ready => _ChatBody(
                 messages: _messages,
                 scrollController: _scrollController,
                 inputController: _inputController,
                 isGenerating: _isGenerating,
-                isListening: _isListening,
-                sttAvailable: _sttAvailable,
+                // Recording (mic pulse) and transcribing (silent processing
+                // after you stop talking) are distinct phases now that STT
+                // has no incremental output — _isListening alone used to
+                // cover both, which made the whole thing look like one
+                // long, unexplained "Listening…" hang.
+                isListening: _isListening && !_stt.isTranscribing,
+                isTranscribing: _stt.isTranscribing,
+                sttAvailable: _stt.state == SttServiceState.ready,
                 onSend: _sendMessage,
                 onMicTap: _toggleListening,
                 onSpeak: _voice.speak,
               ),
-              Positioned(
-                top: 0,
-                left: 0,
-                right: 0,
-                child: Column(
-                  children: [
-                    if (RagService.instance.isPopulating)
-                      _RagProgressBanner(
-                        progress: RagService.instance.populationProgress ?? 0.0,
-                      ),
-                    if (_voice.state == VoiceServiceState.downloading ||
-                        _voice.state == VoiceServiceState.loading)
-                      _VoiceModelBanner(
-                        loading: _voice.state == VoiceServiceState.loading,
-                        progress: _voice.downloadProgress,
-                      ),
-                  ],
-                ),
+            _ => const _StatusMessage(
+                icon: Icons.hourglass_empty,
+                message: 'Initializing...',
               ),
-            ],
+          },
+          // Voice input (Whisper) and RAG index downloads run in the
+          // background from app launch, independent of the main model's
+          // state — surfaced here so they're visible even while the chat
+          // screen above is still showing a Gemma download/loading/error
+          // view, instead of being silently hidden until Gemma is ready.
+          Positioned(
+            top: 0,
+            left: 0,
+            right: 0,
+            child: Column(
+              children: [
+                if (RagService.instance.isPopulating)
+                  _RagProgressBanner(
+                    progress: RagService.instance.populationProgress ?? 0.0,
+                  ),
+                if (_stt.state == SttServiceState.downloading ||
+                    _stt.state == SttServiceState.loading)
+                  _VoiceModelBanner(
+                    loading: _stt.state == SttServiceState.loading,
+                    progress: _stt.downloadProgress,
+                  ),
+                if (_stt.state == SttServiceState.error)
+                  _SttErrorBanner(
+                    message: _stt.errorMessage ?? 'Unknown error',
+                    onRetry: () => _stt.initialize().catchError((e) {
+                      debugPrint('[STT] retry init failed: $e');
+                    }),
+                  ),
+              ],
+            ),
           ),
-        _ => const _StatusMessage(
-            icon: Icons.hourglass_empty,
-            message: 'Initializing...',
-          ),
-      },
+        ],
+      ),
     );
   }
 }
@@ -523,6 +569,7 @@ class _ChatBody extends StatelessWidget {
   final TextEditingController inputController;
   final bool isGenerating;
   final bool isListening;
+  final bool isTranscribing;
   final bool sttAvailable;
   final VoidCallback onSend;
   final VoidCallback onMicTap;
@@ -534,6 +581,7 @@ class _ChatBody extends StatelessWidget {
     required this.inputController,
     required this.isGenerating,
     required this.isListening,
+    required this.isTranscribing,
     required this.sttAvailable,
     required this.onSend,
     required this.onMicTap,
@@ -651,7 +699,8 @@ class _ChatBody extends StatelessWidget {
               // Mic button
               _MicButton(
                 isListening: isListening,
-                enabled: sttAvailable && !isGenerating,
+                isTranscribing: isTranscribing,
+                enabled: sttAvailable && !isGenerating && !isTranscribing,
                 onTap: onMicTap,
               ),
               const SizedBox(width: 4),
@@ -666,7 +715,9 @@ class _ChatBody extends StatelessWidget {
                   decoration: InputDecoration(
                     hintText: isListening
                         ? 'Listening…'
-                        : 'Message Gemma...',
+                        : isTranscribing
+                            ? 'Transcribing…'
+                            : 'Message Gemma...',
                     border: OutlineInputBorder(
                       borderRadius: BorderRadius.circular(24),
                     ),
@@ -705,11 +756,13 @@ class _ChatBody extends StatelessWidget {
 
 class _MicButton extends StatefulWidget {
   final bool isListening;
+  final bool isTranscribing;
   final bool enabled;
   final VoidCallback onTap;
 
   const _MicButton({
     required this.isListening,
+    required this.isTranscribing,
     required this.enabled,
     required this.onTap,
   });
@@ -752,16 +805,29 @@ class _MicButtonState extends State<_MicButton>
       },
       child: IconButton(
         onPressed: widget.enabled ? widget.onTap : null,
-        tooltip: widget.isListening ? 'Stop listening' : 'Speak',
+        tooltip: widget.isTranscribing
+            ? 'Transcribing…'
+            : widget.isListening
+                ? 'Stop listening'
+                : 'Speak',
         style: IconButton.styleFrom(
           backgroundColor: widget.isListening
               ? colorScheme.error.withValues(alpha: 0.15)
               : null,
         ),
-        icon: Icon(
-          widget.isListening ? Icons.mic : Icons.mic_none,
-          color: widget.isListening ? colorScheme.error : null,
-        ),
+        icon: widget.isTranscribing
+            ? SizedBox(
+                width: 20,
+                height: 20,
+                child: CircularProgressIndicator(
+                  strokeWidth: 2,
+                  color: colorScheme.onSurfaceVariant,
+                ),
+              )
+            : Icon(
+                widget.isListening ? Icons.mic : Icons.mic_none,
+                color: widget.isListening ? colorScheme.error : null,
+              ),
       ),
     );
   }
@@ -832,8 +898,8 @@ class _VoiceModelBanner extends StatelessWidget {
                 Expanded(
                   child: Text(
                     loading
-                        ? 'Preparing voice model…'
-                        : 'Downloading voice model (TTS)… $pct%',
+                        ? 'Preparing speech recognition model…'
+                        : 'Downloading speech recognition model (Whisper)… $pct%',
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
                 ),
@@ -841,6 +907,44 @@ class _VoiceModelBanner extends StatelessWidget {
             ),
             const SizedBox(height: 6),
             LinearProgressIndicator(value: loading ? null : progress),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+// ── Voice model error banner ─────────────────────────────────────────────
+
+class _SttErrorBanner extends StatelessWidget {
+  final String message;
+  final VoidCallback onRetry;
+  const _SttErrorBanner({required this.message, required this.onRetry});
+
+  @override
+  Widget build(BuildContext context) {
+    final colorScheme = Theme.of(context).colorScheme;
+    return Material(
+      elevation: 2,
+      child: Container(
+        color: colorScheme.errorContainer,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            Icon(Icons.mic_off, size: 16, color: colorScheme.onErrorContainer),
+            const SizedBox(width: 8),
+            Expanded(
+              child: Text(
+                'Voice input unavailable: $message',
+                style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                  color: colorScheme.onErrorContainer,
+                ),
+              ),
+            ),
+            TextButton(
+              onPressed: onRetry,
+              child: const Text('Retry'),
+            ),
           ],
         ),
       ),

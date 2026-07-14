@@ -12,7 +12,8 @@
       "Bash(otool -L /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/LiteRtLm.framework/Versions/A/LiteRtLm)",
       "Bash(otool -l /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/LiteRtLm.framework/Versions/A/LiteRtLm)",
       "Bash(otool -L /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/build/macos/Build/Products/Debug/litert_slm_gemma4.app/Contents/Frameworks/GemmaModelConstraintProvider.framework/Versions/A/GemmaModelConstraintProvider)",
-      "Bash(otool -l /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/.dart_tool/hooks_runner/shared/flutter_gemma_litertlm/build/84fd4fa0ea/libGemmaModelConstraintProvider.dylib)"
+      "Bash(otool -l /Users/hpsenapati/Documents/Dev/Practice/flutter-apps/litert-slm-gemma-4-flutter-app/.dart_tool/hooks_runner/shared/flutter_gemma_litertlm/build/84fd4fa0ea/libGemmaModelConstraintProvider.dylib)",
+      "Bash(python3 -c ' *)"
     ]
   }
 }

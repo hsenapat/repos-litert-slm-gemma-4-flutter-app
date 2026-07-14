@@ -8,7 +8,8 @@ plugins {
 android {
     namespace = "com.hpsenapati.litert_slm_gemma4"
     compileSdk = flutter.compileSdkVersion
-    ndkVersion = flutter.ndkVersion
+    //ndkVersion = flutter.ndkVersion
+    ndkVersion = "30.0.15729638"
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

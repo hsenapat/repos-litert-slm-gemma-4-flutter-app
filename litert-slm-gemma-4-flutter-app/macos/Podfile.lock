@@ -1,15 +1,36 @@
 PODS:
+  - ffmpeg_kit_flutter_new_min (7.1.1):
+    - ffmpeg_kit_flutter_new_min/min (= 7.1.1)
+    - FlutterMacOS
+  - ffmpeg_kit_flutter_new_min/min (7.1.1):
+    - FlutterMacOS
+  - flutter_tts (0.0.1):
+    - FlutterMacOS
   - FlutterMacOS (1.0.0)
+  - whisper_ggml (1.0.0):
+    - FlutterMacOS
 
 DEPENDENCIES:
+  - ffmpeg_kit_flutter_new_min (from `Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_flutter_new_min/macos`)
+  - flutter_tts (from `Flutter/ephemeral/.symlinks/plugins/flutter_tts/macos`)
   - FlutterMacOS (from `Flutter/ephemeral`)
+  - whisper_ggml (from `Flutter/ephemeral/.symlinks/plugins/whisper_ggml/macos`)
 
 EXTERNAL SOURCES:
+  ffmpeg_kit_flutter_new_min:
+    :path: Flutter/ephemeral/.symlinks/plugins/ffmpeg_kit_flutter_new_min/macos
+  flutter_tts:
+    :path: Flutter/ephemeral/.symlinks/plugins/flutter_tts/macos
   FlutterMacOS:
     :path: Flutter/ephemeral
+  whisper_ggml:
+    :path: Flutter/ephemeral/.symlinks/plugins/whisper_ggml/macos
 
 SPEC CHECKSUMS:
+  ffmpeg_kit_flutter_new_min: 623d95fe4c00311175a10f9ab3efa312c266ead6
+  flutter_tts: ae915565cc6948444b513acc8ee021993281e027
   FlutterMacOS: d0db08ddef1a9af05a5ec4b724367152bb0500b1
+  whisper_ggml: e5e0ee0c5b0f0485b9659f4ebcd340b7ceb94fac
 
 PODFILE CHECKSUM: 8844c8db292cb65d8df2b945c9427e6bbd78e507
 
